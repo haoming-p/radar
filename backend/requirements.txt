@@ -1,0 +1,27 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+python-dotenv==1.0.1
+python-multipart==0.0.20
+
+# AI / Embeddings
+openai==1.59.9
+
+# Data processing
+pandas==2.2.3
+numpy==2.2.1
+scikit-learn==1.6.1
+
+# Dimensionality reduction
+umap-learn==0.5.7
+
+# NLP
+nltk==3.9.1
+
+# AWS S3
+boto3==1.35.93
+
+# Excel support
+openpyxl==3.1.5
+
+# Pydantic (used by FastAPI)
+pydantic==2.10.4

@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { StepCreateDataset } from '../components/internal/upload/StepCreateDataset';
 import { StepDataset } from '../components/internal/dataset/StepDataset';
-import StepAnalysisSpatial from '../components/internal/map/StepAnalysisSpatial';
+import AnalysisView from '../components/internal/AnalysisView';
 
 const STEPS = [
   { id: 1, name: 'Create Dataset', description: 'Search or upload patents' },
   { id: 2, name: 'Dataset', description: 'Preview patents' },
-  { id: 3, name: 'Analysis', description: 'Market opportunity analysis' },
+  { id: 3, name: 'Analysis', description: 'Patent landscape analysis' },
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,17 +32,17 @@ export default function InternalView({ onBack }: InternalViewProps) {
     setCurrentStep(3);
   };
 
-  // Step 3: Full screen analysis
-  if (currentStep === 3) {
+  // Step 3: Full screen analysis with new AnalysisView
+  if (currentStep === 3 && pipelineData) {
     return (
-      <div className="flex-1 w-full h-full">
-        <StepAnalysisSpatial onBack={() => setCurrentStep(2)} liveData={pipelineData} uploadedFile={uploadedFile} />
+      <div className="flex-1 w-full" style={{ height: 'calc(100vh - 49px)' }}>
+        <AnalysisView onBack={() => setCurrentStep(2)} data={pipelineData} />
       </div>
     );
   }
 
   return (
-    <div className="flex-1 w-full flex flex-col h-full min-h-screen bg-gray-100 p-6">
+    <div className="flex-1 w-full flex flex-col min-h-0 bg-gray-100 p-6" style={{ height: 'calc(100vh - 49px)' }}>
       {/* Back link */}
       <button
         onClick={() => {
@@ -108,7 +108,6 @@ export default function InternalView({ onBack }: InternalViewProps) {
               onBack={() => setCurrentStep(1)}
               onNewAnalysis={handleNewAnalysisComplete}
             />
-
           )}
         </div>
       </div>

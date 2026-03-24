@@ -6,39 +6,28 @@ interface HomePageProps {
 
 export default function HomePage({ onNavigate }: HomePageProps) {
   return (
-    <div className="flex-1 flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-[#0d3356] to-[#1a4a7a]">
-      {/* Logo / Title */}
-      <div className="mb-12 text-center">
-        <h1 className="text-4xl font-bold text-white tracking-wide">
-          VALUENEX Radar
-        </h1>
-        <p className="text-white/60 mt-2 text-sm">Patent Analysis Platform</p>
-      </div>
-
-      {/* Buttons */}
-      <div className="flex flex-col gap-4 w-72">
+    <div className="flex-1 flex flex-col items-center pt-[15vh] bg-white">
+      {/* Buttons in a row */}
+      <div className="flex gap-6">
         <button
           onClick={() => onNavigate('internal')}
-          className="px-6 py-4 bg-white text-[#0d3356] rounded-lg font-semibold text-lg hover:bg-gray-100 transition-colors shadow-lg"
+          className="px-8 py-4 bg-white text-[#0d3356] border border-gray-300 rounded-lg font-medium text-base hover:bg-gray-50 hover:border-[#0d3356] transition-colors min-w-[180px]"
         >
-          内部视角
-          <span className="block text-sm font-normal text-gray-500 mt-1">Internal View</span>
+          Internal View
         </button>
 
         <button
           onClick={() => onNavigate('client')}
-          className="px-6 py-4 bg-white/10 text-white border border-white/30 rounded-lg font-semibold text-lg hover:bg-white/20 transition-colors"
+          className="px-8 py-4 bg-white text-[#0d3356] border border-gray-300 rounded-lg font-medium text-base hover:bg-gray-50 hover:border-[#0d3356] transition-colors min-w-[180px]"
         >
-          客户视角
-          <span className="block text-sm font-normal text-white/60 mt-1">Customer View</span>
+          Customer View
         </button>
 
         <button
-          onClick={() => onNavigate('test')}
-          className="px-6 py-4 bg-white/5 text-white/70 border border-white/15 rounded-lg font-medium text-sm hover:bg-white/10 transition-colors"
+          onClick={() => onNavigate('v11')}
+          className="px-8 py-4 bg-white text-[#0d3356] border border-gray-300 rounded-lg font-medium text-base hover:bg-gray-50 hover:border-[#0d3356] transition-colors min-w-[180px]"
         >
-          Test
-          <span className="block text-xs font-normal text-white/40 mt-1">View with sample data</span>
+          Radar 1.1 View
         </button>
       </div>
     </div>

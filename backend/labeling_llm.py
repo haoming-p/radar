@@ -147,3 +147,117 @@ def generate_area_labels_llm(patents, area_patent_indices):
 
     print(f"Generated LLM labels for {len(results)} areas")
     return results
+
+
+def generate_macro_area_labels_llm(areas, cluster_labels):
+    """
+    Generate a key phrase + summary paragraph for each macro area.
+    Uses cluster keywords as context (not raw patent titles).
+
+    Args:
+        areas: dict of area_id -> area data (with cluster_ids, keywords)
+        cluster_labels: dict of cluster_id -> keyword string from c-TF-IDF
+    Returns:
+        dict of area_id -> {key_phrase, summary}
+    """
+    if not areas:
+        return {}
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    results = {}
+
+    for area_id_str, area in areas.items():
+        cluster_ids = area.get("cluster_ids", [])
+        area_keywords = area.get("keywords", "")
+        patent_count = area.get("patent_count", 0)
+        cluster_count = area.get("cluster_count", 0)
+
+        # Collect keywords from member clusters
+        member_keywords = []
+        for cid in cluster_ids[:30]:  # cap to avoid huge prompts
+            label = cluster_labels.get(cid, cluster_labels.get(str(cid), ""))
+            if label and label != "unlabeled":
+                member_keywords.append(label)
+
+        keywords_block = "\n".join(f"- Cluster: {kw}" for kw in member_keywords)
+
+        try:
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a technology analyst. You are given keyword lists from clusters "
+                            "that form a region on a patent/publication landscape map. "
+                            "These clusters are spatially close, meaning they share related themes.\n\n"
+                            "Produce:\n"
+                            "1. KEY_PHRASE: A single short phrase (2-4 words) that captures the overarching theme. "
+                            "Examples: 'Digital Infrastructure', 'Battery Technology', 'Climate Convergence'.\n"
+                            "2. SUMMARY: A paragraph (3-5 sentences) describing what this region covers, "
+                            "the main sub-topics, and any notable patterns.\n\n"
+                            "Format your response exactly as:\n"
+                            "KEY_PHRASE: <phrase>\n"
+                            "SUMMARY: <paragraph>\n\n"
+                            "Return only the formatted output."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Area with {cluster_count} clusters and {patent_count} patents.\n"
+                            f"Area-level keywords: {area_keywords}\n\n"
+                            f"Cluster keywords:\n{keywords_block}"
+                        ),
+                    },
+                ],
+                max_tokens=400,
+                temperature=0.3,
+            )
+
+            raw = response.choices[0].message.content.strip()
+            key_phrase, summary = _parse_macro_area_response(raw)
+            results[area_id_str] = {
+                "key_phrase": key_phrase,
+                "summary": summary,
+            }
+            print(f"  Area {area_id_str}: '{key_phrase}'")
+
+        except Exception as e:
+            print(f"  Area {area_id_str}: LLM failed ({e})")
+            results[area_id_str] = {
+                "key_phrase": "Unlabeled Area",
+                "summary": "",
+            }
+
+    print(f"Generated LLM labels for {len(results)} macro areas")
+    return results
+
+
+def _parse_macro_area_response(raw):
+    key_phrase = "Unlabeled Area"
+    summary = ""
+
+    for line in raw.split("\n"):
+        line = line.strip()
+        if line.upper().startswith("KEY_PHRASE:"):
+            key_phrase = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("SUMMARY:"):
+            summary = line.split(":", 1)[1].strip()
+
+    # If summary spans multiple lines after SUMMARY:
+    if not summary:
+        in_summary = False
+        parts = []
+        for line in raw.split("\n"):
+            line = line.strip()
+            if line.upper().startswith("SUMMARY:"):
+                rest = line.split(":", 1)[1].strip()
+                if rest:
+                    parts.append(rest)
+                in_summary = True
+            elif in_summary and line:
+                parts.append(line)
+        summary = " ".join(parts)
+
+    return key_phrase, summary

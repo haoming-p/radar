@@ -1,19 +1,16 @@
 """
-Main Pipeline: CSV → JSON for frontend
+Radar 1.2 Pipeline: CSV → JSON for frontend
 
 Flow:
 1. Load CSV with embeddings
 2. Load normalized applicants
-3. Cluster on 1536D embeddings (HDBSCAN/K-means/Agglomerative)
-4. Reduce dimensions for layout (UMAP/t-SNE/PCA → 2D)
-5. Label topics and areas
-   - c-TF-IDF: local, fast, keyword-based (labeling.py)
-   - LLM: GPT-4o-mini, keywords with scores + summary (labeling_llm.py)
-6. Spatial grid + area labels
-7. Market categories (Growing/Niche/Major/Declining)
-8. Topic hierarchy
-9. Calculate player data from normalized applicants
-10. Output JSON with players
+3. Agglomerative clustering on 1536D embeddings (~1500 clusters)
+4. UMAP reduce cluster centroids to 2D
+5. Label clusters (c-TF-IDF)
+6. Area detection (TODO: from visual density)
+7. Area labeling (LLM key phrase + summary)
+8. Player data
+9. Output JSON
 """
 
 import json
@@ -25,16 +22,8 @@ import pandas as pd
 from pathlib import Path
 from collections import Counter, defaultdict
 
-from dimensionality import reduce_dimensions
-from clustering import cluster_patents
-from labeling import generate_topic_labels
-from labeling_llm import generate_topic_labels_llm
-from spatial_grid import create_areas, build_topic_hierarchy
-from market_category import (
-    classify_areas,
-    classify_areas_per_topic,
-    get_category_summary,
-)
+from spatial_grid import cluster_and_reduce
+from labeling_llm import generate_macro_area_labels_llm
 
 
 # ============ LOAD FUNCTIONS ============
@@ -89,12 +78,12 @@ def load_normalized_applicants(filepath):
     return applicants
 
 
-# ============ PLAYER DATA CALCULATION ============
+# ============ PLAYER DATA ============
 
-def calculate_player_data(patents_with_areas, applicants, areas, top_n=20):
-    if len(patents_with_areas) != len(applicants):
-        min_len = min(len(patents_with_areas), len(applicants))
-        patents_with_areas = patents_with_areas[:min_len]
+def calculate_player_data(patents_with_clusters, applicants, clusters, top_n=20):
+    if len(patents_with_clusters) != len(applicants):
+        min_len = min(len(patents_with_clusters), len(applicants))
+        patents_with_clusters = patents_with_clusters[:min_len]
         applicants = applicants[:min_len]
 
     applicant_patents = defaultdict(list)
@@ -105,16 +94,16 @@ def calculate_player_data(patents_with_areas, applicants, areas, top_n=20):
     player_stats = []
 
     for applicant, patent_indices in applicant_patents.items():
-        area_counts = Counter()
+        cluster_counts = Counter()
         yearly_counts = Counter()
 
         for idx in patent_indices:
-            patent = patents_with_areas[idx]
-            area_id = patent.get("area_id")
+            patent = patents_with_clusters[idx]
+            cluster_id = patent.get("cluster_id")
             year = patent.get("year")
 
-            if area_id is not None and area_id >= 0:
-                area_counts[area_id] += 1
+            if cluster_id is not None and cluster_id >= 0:
+                cluster_counts[cluster_id] += 1
             if year:
                 yearly_counts[year] += 1
 
@@ -131,7 +120,7 @@ def calculate_player_data(patents_with_areas, applicants, areas, top_n=20):
             "name": applicant,
             "total": len(patent_indices),
             "trend": trend,
-            "areas": dict(area_counts),
+            "clusters": dict(cluster_counts),
             "yearly": dict(yearly_counts),
         })
 
@@ -156,14 +145,7 @@ def run_pipeline(
     input_path,
     output_path,
     applicants_path=None,
-    dim_method="umap",
-    cluster_method="hdbscan",
-    grid_size=1.5,
-    min_cluster_size=15,
-    min_samples=5,
-    k=None,
-    levels=4,
-    level_clusters=None,
+    distance_threshold=1.1,
     top_players=20,
     random_state=42,
 ):
@@ -183,109 +165,48 @@ def run_pipeline(
             print("[1b] Loading applicants...")
             applicants = load_normalized_applicants(str(default_path))
 
-    # Step 2: Cluster
-    print(f"[2] Clustering: {cluster_method}")
-    cluster_kwargs = {}
-    if cluster_method == "hdbscan":
-        cluster_kwargs["min_cluster_size"] = min_cluster_size
-        cluster_kwargs["min_samples"] = min_samples
-    elif cluster_method == "kmeans":
-        if k:
-            cluster_kwargs["n_clusters"] = k
-    elif cluster_method == "agglomerative":
-        cluster_kwargs["n_levels"] = levels
-        if level_clusters:
-            cluster_kwargs["level_clusters"] = level_clusters
+    # Step 2: Cluster + reduce to 2D (both UMAP and t-SNE)
+    print(f"[2] Clustering + dimensionality reduction (both UMAP & t-SNE)")
+    result = cluster_and_reduce(
+        patents, embeddings,
+        distance_threshold=distance_threshold,
+        random_state=random_state,
+    )
+    clusters = result["clusters"]
+    print(f"  {len(clusters)} clusters")
 
-    cluster_result = cluster_patents(embeddings, method=cluster_method, **cluster_kwargs)
-    topic_labels = cluster_result["labels"]
-    print(f"  {cluster_result['n_clusters']} topics, {cluster_result.get('n_noise', 0)} noise")
+    # Step 3: Area detection (placeholder — TODO: visual density based)
+    print(f"[3] Area detection (skipped for now)")
+    areas = {}
 
-    # Step 3: Reduce dimensions
-    print(f"[3] Dimensionality: {dim_method}")
-    coords = reduce_dimensions(embeddings, method=dim_method, random_state=random_state)
-    print(f"  Reduced to 2D")
-
-    # Step 4: Labels
-    print(f"[4] Labeling (c-TF-IDF)")
-    topic_labels_dict = generate_topic_labels(patents, topic_labels)
-    print(f"  {len(topic_labels_dict)} topic labels")
-
-    # Step 4b: LLM Labels (comparison)
-    print(f"[4b] Labeling (LLM) — comparison")
-    topic_labels_llm = generate_topic_labels_llm(patents, topic_labels)
-
-    # Print comparison for up to 3 topics
-    compare_ids = list(topic_labels_dict.keys())[:3]
-    if compare_ids:
-        print("\n" + "=" * 70)
-        print("LABEL COMPARISON: c-TF-IDF vs LLM")
-        print("=" * 70)
-        for tid in compare_ids:
-            tfidf_label = topic_labels_dict.get(tid, "N/A")
-            llm_data = topic_labels_llm.get(tid, {})
-            llm_keywords = llm_data.get("keywords", [])
-            llm_summary = llm_data.get("summary", "")
-            print(f"\n--- Topic {tid} ---")
-            print(f"  c-TF-IDF:  {tfidf_label}")
-            print(f"  LLM keys:  {', '.join(f'{k['term']}({k['score']})' for k in llm_keywords[:8])}")
-            if llm_summary:
-                print(f"  LLM summary: {llm_summary}")
-        print("=" * 70 + "\n")
-
-    # Step 5: Spatial grid
-    print(f"[5] Spatial grid (grid_size={grid_size})")
-    grid_result = create_areas(patents, coords, topic_labels, grid_size=grid_size)
-    print(f"  {grid_result['stats']['total_areas']} areas")
-
-    # Step 6: Market categories
-    print(f"[6] Market categories")
-    areas = grid_result["areas"]
-    areas = classify_areas(areas)
-    areas = classify_areas_per_topic(areas)
-    category_summary = get_category_summary(areas)
-    print(f"  Classified {len(areas)} areas")
-
-    # Step 7: Topic hierarchy
-    print(f"[7] Topic hierarchy")
-    topics = build_topic_hierarchy(areas, topic_labels_dict)
-    print(f"  {len(topics)} topics")
-
-    # Step 8: Player data
+    # Step 4: Player data
     players_dict = {}
     if applicants:
-        print(f"[8] Player data")
+        print(f"[4] Player data")
         players_dict = calculate_player_data(
-            grid_result["patents"],
+            result["patents"],
             applicants,
-            areas,
-            top_n=top_players
+            clusters,
+            top_n=top_players,
         )
 
-    # Step 9: Output
+    # Step 5: Output
     output = {
-        "patents": grid_result["patents"],
+        "patents": result["patents"],
+        "clusters": clusters,
         "areas": areas,
-        "topics": topics,
-        "categories": category_summary,
         "players": players_dict,
         "stats": {
-            **grid_result["stats"],
-            "total_topics": cluster_result["n_clusters"],
-            "noise_patents": cluster_result.get("n_noise", 0),
+            **result["stats"],
+            "total_areas": len(areas),
             "total_players": len(players_dict),
         },
         "method": {
-            "dimensionality": dim_method,
-            "clustering": cluster_method,
-            "cluster_params": cluster_result["method_params"],
-            "grid_size": grid_size,
-            "clustered_on": "embeddings",
+            "clustering": "agglomerative",
+            "distance_threshold": distance_threshold,
+            **result.get("method", {}),
         },
     }
-
-    if cluster_method == "agglomerative" and "hierarchy" in cluster_result:
-        output["hierarchy"] = cluster_result["hierarchy"]
 
     with open(output_path, "w") as f:
         json.dump(_convert_for_json(output), f, indent=2)
@@ -312,22 +233,16 @@ def _convert_for_json(obj):
 def _print_summary(output):
     stats = output["stats"]
     method = output["method"]
-    categories = output["categories"]
     players = output.get("players", {})
 
     print("\n" + "=" * 50)
     print("SUMMARY")
     print("=" * 50)
     print(f"Patents:     {stats['total_patents']}")
-    print(f"Topics:      {stats['total_topics']}")
-    print(f"Areas:       {stats['total_areas']}")
-    print(f"Noise:       {stats['noise_patents']}")
+    print(f"Clusters:    {stats['total_clusters']}")
+    print(f"Areas:       {stats.get('total_areas', 0)}")
     print(f"Players:     {len(players)}")
-    print(f"Method:      {method['dimensionality']} + {method['clustering']}")
-    print(f"Grid size:   {method['grid_size']}")
-    print("Categories:")
-    for cat, info in categories.items():
-        print(f"  {cat}: {info['count']} areas")
+    print(f"Method:      agglomerative (dt={method['distance_threshold']}) → {method['dimensionality']}")
     if players:
         print("Top 5 Players:")
         for name, data in list(players.items())[:5]:
@@ -336,7 +251,7 @@ def _print_summary(output):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Patent clustering pipeline")
+    parser = argparse.ArgumentParser(description="Radar 1.2 patent analysis pipeline")
 
     parser.add_argument("input", help="Input CSV with embeddings")
     parser.add_argument("output", help="Output JSON")
@@ -344,35 +259,18 @@ def main():
     parser.add_argument("--applicants", type=str, default=None)
     parser.add_argument("--dim", type=str, default="umap",
                         choices=["umap", "tsne", "pca"])
-    parser.add_argument("--cluster", type=str, default="hdbscan",
-                        choices=["hdbscan", "kmeans", "agglomerative"])
-    parser.add_argument("--grid-size", type=float, default=1.5)
-    parser.add_argument("--min-cluster-size", type=int, default=15)
-    parser.add_argument("--min-samples", type=int, default=5)
-    parser.add_argument("--k", type=int, default=None)
-    parser.add_argument("--levels", type=int, default=4)
-    parser.add_argument("--level-clusters", type=str, default=None)
+    parser.add_argument("--distance-threshold", type=float, default=1.1)
     parser.add_argument("--top-players", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args()
-
-    level_clusters = None
-    if args.level_clusters:
-        level_clusters = [int(x) for x in args.level_clusters.split(",")]
 
     run_pipeline(
         input_path=args.input,
         output_path=args.output,
         applicants_path=args.applicants,
         dim_method=args.dim,
-        cluster_method=args.cluster,
-        grid_size=args.grid_size,
-        min_cluster_size=args.min_cluster_size,
-        min_samples=args.min_samples,
-        k=args.k,
-        levels=args.levels,
-        level_clusters=level_clusters,
+        distance_threshold=args.distance_threshold,
         top_players=args.top_players,
         random_state=args.seed,
     )

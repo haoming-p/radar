@@ -25,9 +25,7 @@ from openai import OpenAI
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_BATCH_SIZE = 100
 
-DEFAULT_GRID_SIZE = 1.2
-DEFAULT_MIN_CLUSTER_SIZE = 20
-DEFAULT_MIN_SAMPLES = 5
+DEFAULT_DISTANCE_THRESHOLD = 1.1
 DEFAULT_TOP_PLAYERS = 20
 
 BACKEND_DIR = Path(__file__).parent
@@ -49,8 +47,8 @@ def compute_file_hash(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def compute_result_id(file_hash: str, grid_size: float, min_cluster_size: int, min_samples: int, top_players: int) -> str:
-    param_str = f"{file_hash}|gs={grid_size}|mcs={min_cluster_size}|ms={min_samples}|tp={top_players}"
+def compute_result_id(file_hash: str, distance_threshold: float, top_players: int) -> str:
+    param_str = f"{file_hash}|dt={distance_threshold}|tp={top_players}"
     return hashlib.sha256(param_str.encode()).hexdigest()
 
 
@@ -103,7 +101,7 @@ def convert_for_json(obj):
 
 
 def run_pipeline_with_params(df, embeddings, file_hash, result_id,
-                              grid_size, min_cluster_size, min_samples, top_players):
+                              distance_threshold, top_players):
     from pipeline import run_pipeline
 
     temp_input = get_local_cache_path("temp", file_hash, "csv")
@@ -115,11 +113,7 @@ def run_pipeline_with_params(df, embeddings, file_hash, result_id,
     result = run_pipeline(
         input_path=str(temp_input),
         output_path=str(result_local),
-        dim_method="umap",
-        cluster_method="hdbscan",
-        grid_size=grid_size,
-        min_cluster_size=min_cluster_size,
-        min_samples=min_samples,
+        distance_threshold=distance_threshold,
         top_players=top_players,
     )
 
@@ -132,9 +126,7 @@ def run_pipeline_with_params(df, embeddings, file_hash, result_id,
 @router.post("/api/demo/upload")
 async def upload_and_process(
     file: UploadFile = File(...),
-    grid_size: float = Form(DEFAULT_GRID_SIZE),
-    min_cluster_size: int = Form(DEFAULT_MIN_CLUSTER_SIZE),
-    min_samples: int = Form(DEFAULT_MIN_SAMPLES),
+    distance_threshold: float = Form(DEFAULT_DISTANCE_THRESHOLD),
     top_players: int = Form(DEFAULT_TOP_PLAYERS),
 ):
     content = await file.read()
@@ -164,7 +156,7 @@ async def upload_and_process(
                 return
 
             file_hash = compute_file_hash(content)
-            result_id = compute_result_id(file_hash, grid_size, min_cluster_size, min_samples, top_players)
+            result_id = compute_result_id(file_hash, distance_threshold, top_players)
 
             # Step 2: Check full result cache (parameter-aware)
             result_local = get_local_cache_path("result", result_id, "json")
@@ -175,13 +167,14 @@ async def upload_and_process(
                 yield f"data: {json.dumps({'step': 'done', 'message': 'Analysis complete', 'resultId': result_id})}\n\n"
                 return
 
-            if s3_exists(result_s3_key):
-                yield f"data: {json.dumps({'step': 'cache_hit', 'message': 'Using cached results from cloud'})}\n\n"
-                result_str = s3_download_string(result_s3_key)
-                with open(result_local, 'w') as f:
-                    f.write(result_str)
-                yield f"data: {json.dumps({'step': 'done', 'message': 'Analysis complete', 'resultId': result_id})}\n\n"
-                return
+            # TODO: re-enable S3 result cache after pipeline format is stable
+            # if s3_exists(result_s3_key):
+            #     yield f"data: {json.dumps({'step': 'cache_hit', 'message': 'Using cached results from cloud'})}\n\n"
+            #     result_str = s3_download_string(result_s3_key)
+            #     with open(result_local, 'w') as f:
+            #         f.write(result_str)
+            #     yield f"data: {json.dumps({'step': 'done', 'message': 'Analysis complete', 'resultId': result_id})}\n\n"
+            #     return
 
             # Step 3: Check embeddings cache (keyed by file hash only)
             embeddings_local = get_local_cache_path("embeddings", file_hash, "csv")
@@ -253,7 +246,7 @@ async def upload_and_process(
 
             result, result_local = run_pipeline_with_params(
                 df, embeddings, file_hash, result_id,
-                grid_size, min_cluster_size, min_samples, top_players,
+                distance_threshold, top_players,
             )
 
             yield f"data: {json.dumps({'step': 'pipeline', 'message': 'Pipeline complete'})}\n\n"

@@ -32,19 +32,21 @@ def _reduce_umap(
     embeddings: np.ndarray,
     random_state: int = 42,
     n_neighbors: int = 15,
-    min_dist: float = 0.1,
+    min_dist: float = 1.0,
+    spread: float = 3.0,
     metric: str = "cosine",
     **kwargs
 ) -> np.ndarray:
     if not UMAP_AVAILABLE:
         raise ImportError("UMAP not installed. Run: pip install umap-learn")
 
-    print(f"Running UMAP (n_neighbors={n_neighbors}, min_dist={min_dist})...")
+    print(f"Running UMAP (n_neighbors={n_neighbors}, min_dist={min_dist}, spread={spread})...")
 
     reducer = UMAP(
         n_components=2,
         n_neighbors=n_neighbors,
         min_dist=min_dist,
+        spread=spread,
         metric=metric,
         random_state=random_state,
         **kwargs

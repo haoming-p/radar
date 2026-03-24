@@ -168,9 +168,7 @@ export function StepDataset({ file, onBack, onNewAnalysis }: StepDatasetProps) {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('grid_size', '1.2');
-      formData.append('min_cluster_size', '20');
-      formData.append('min_samples', '5');
+      formData.append('distance_threshold', '1.1');
       formData.append('top_players', '20');
 
       console.log('[Generate] Starting upload to', `${DEMO_API_BASE}/api/demo/upload`);

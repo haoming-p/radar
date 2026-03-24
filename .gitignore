@@ -27,3 +27,11 @@ Thumbs.db
 # CSV data files (but keep test data)
 *.csv
 !frontend/src/testData/*.csv
+
+
+# Test/reference data (local only)
+frontend/src/testData/analysis-*.csv
+frontend/src/testData/raw-*.csv
+frontend/src/testData/radar-*.png
+frontend/src/testData/contour-*.png
+frontend/src/testData/radar10-*.json

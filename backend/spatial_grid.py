@@ -1,207 +1,150 @@
 """
-Spatial Grid: Divide map into geographic areas
+Clustering: Agglomerative on embeddings → reduce centroids to 2D (both UMAP + t-SNE)
+
+Flow:
+1. Agglomerative clustering on 1536D embeddings (distance_threshold)
+2. Compute cluster centroids in embedding space
+3. Reduce centroids to 2D with BOTH UMAP and t-SNE
+4. Each patent inherits its cluster's 2D positions
+5. Label clusters (c-TF-IDF)
 """
 
 import numpy as np
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from collections import defaultdict, Counter
+from sklearn.cluster import AgglomerativeClustering
 
+from dimensionality import reduce_dimensions
 from labeling import generate_area_labels
 
 
-def create_areas(
+def cluster_and_reduce(
     patents: List[Dict[str, Any]],
-    coords: np.ndarray,
-    topic_labels: np.ndarray,
-    grid_size: float = 6.0,
-    min_patents_per_area: int = 2,
+    embeddings: np.ndarray,
+    distance_threshold: float = 1.1,
+    random_state: int = 42,
 ) -> Dict[str, Any]:
-    n_patents = len(patents)
+    """
+    1. Agglomerative clustering on full embeddings
+    2. Reduce centroids to 2D with both UMAP and t-SNE
+    3. Patents inherit cluster centroid positions
+    """
+    n_patents = embeddings.shape[0]
 
-    print(f"Creating spatial grid (grid_size={grid_size})...")
+    # Step 1: Agglomerative clustering
+    print(f"  Agglomerative clustering (distance_threshold={distance_threshold})...")
+    agg = AgglomerativeClustering(
+        n_clusters=None,
+        distance_threshold=distance_threshold,
+        linkage="ward",
+    )
+    labels = agg.fit_predict(embeddings)
+    n_clusters = len(set(labels))
+    print(f"  → {n_clusters} clusters from {n_patents} patents")
 
-    # Step 1: Assign each patent to a grid cell
-    cell_patents = defaultdict(list)
+    # Step 2: Compute cluster centroids in embedding space
+    cluster_indices = defaultdict(list)
+    for i, label in enumerate(labels):
+        cluster_indices[label].append(i)
 
-    for i in range(n_patents):
-        x, y = coords[i]
-        cell_x = int(x // grid_size)
-        cell_y = int(y // grid_size)
-        cell_key = f"{cell_x}_{cell_y}"
+    cluster_ids_sorted = sorted(cluster_indices.keys())
+    centroids_hd = np.array([
+        embeddings[cluster_indices[cid]].mean(axis=0)
+        for cid in cluster_ids_sorted
+    ])
+    print(f"  Computed {len(centroids_hd)} centroids in {embeddings.shape[1]}D")
 
-        cell_patents[cell_key].append({
-            "index": i,
-            "x": float(x),
-            "y": float(y),
-            "topic_id": int(topic_labels[i]),
-            "year": patents[i].get("year", 2020),
-            "title": patents[i].get("title", ""),
-            "abstract": patents[i].get("abstract", ""),
-        })
+    # Step 3: Reduce centroids to 2D with BOTH methods
+    print(f"  Reducing centroids to 2D (UMAP)...")
+    coords_umap = reduce_dimensions(centroids_hd, method="umap", random_state=random_state)
 
-    # Step 2: Create areas from cells with enough patents
-    areas = {}
-    area_id = 0
-    patent_area_map = {}
-    area_patent_indices = {}
-    small_cells = []
+    print(f"  Reducing centroids to 2D (t-SNE)...")
+    coords_tsne = reduce_dimensions(centroids_hd, method="tsne", random_state=random_state)
 
-    for cell_key, cell_patents_list in cell_patents.items():
-        if len(cell_patents_list) >= min_patents_per_area:
-            area = _create_area(area_id, cell_key, cell_patents_list)
-            areas[str(area_id)] = area
+    # Step 4: Build cluster data with both coordinate sets
+    clusters = {}
+    cluster_patent_indices = {}
 
-            area_patent_indices[area_id] = []
-            for p in cell_patents_list:
-                patent_area_map[p["index"]] = area_id
-                area_patent_indices[area_id].append(p["index"])
+    # Patent position arrays for both methods
+    patent_positions_umap = np.zeros((n_patents, 2))
+    patent_positions_tsne = np.zeros((n_patents, 2))
 
-            area_id += 1
-        else:
-            small_cells.extend(cell_patents_list)
+    for idx, cid in enumerate(cluster_ids_sorted):
+        indices = cluster_indices[cid]
+        ux, uy = float(coords_umap[idx, 0]), float(coords_umap[idx, 1])
+        tx, ty = float(coords_tsne[idx, 0]), float(coords_tsne[idx, 1])
 
-    # Step 3: Assign small cell patents to nearest area
-    for patent in small_cells:
-        nearest = _find_nearest_area(patent["x"], patent["y"], areas)
-        patent_area_map[patent["index"]] = nearest
-        if nearest is not None and str(nearest) in areas:
-            areas[str(nearest)]["count"] += 1
-            if nearest in area_patent_indices:
-                area_patent_indices[nearest].append(patent["index"])
-            year = patent["year"]
+        # All patents in this cluster get the same positions
+        for i in indices:
+            patent_positions_umap[i] = [ux, uy]
+            patent_positions_tsne[i] = [tx, ty]
+
+        # Year counts
+        year_counts = Counter()
+        for i in indices:
+            year = patents[i].get("year")
             if year:
-                year_counts = areas[str(nearest)]["yearCounts"]
-                year_counts[year] = year_counts.get(year, 0) + 1
+                year_counts[year] += 1
 
-    # Step 4: Generate area labels
-    print("Generating area-level labels...")
-    area_labels = generate_area_labels(patents, area_patent_indices, n_keywords=12)
+        # Trend
+        years = sorted(year_counts.keys())
+        trend = 1.0
+        if len(years) >= 2:
+            mid = years[len(years) // 2]
+            early = sum(c for y, c in year_counts.items() if y <= mid)
+            late = sum(c for y, c in year_counts.items() if y > mid)
+            trend = round(late / early, 2) if early > 0 else 1.0
 
-    for area_id_str, area in areas.items():
-        area_id_int = int(area_id_str)
-        area["label"] = area_labels.get(area_id_int, "unlabeled")
+        clusters[str(cid)] = {
+            "id": cid,
+            "centroid_umap": {"x": ux, "y": uy},
+            "centroid_tsne": {"x": tx, "y": ty},
+            "count": len(indices),
+            "yearCounts": dict(year_counts),
+            "trend": trend,
+            "label": "",
+        }
+        cluster_patent_indices[cid] = indices
 
-    # Step 5: Build output patents list
+    # Step 5: Label clusters (c-TF-IDF)
+    print("  Labeling clusters (c-TF-IDF)...")
+    cluster_labels = generate_area_labels(
+        patents, cluster_patent_indices, n_keywords=12
+    )
+    for cid_str, cluster in clusters.items():
+        cluster["label"] = cluster_labels.get(int(cid_str), "unlabeled")
+
+    # Step 6: Build output patents with both coordinate sets
     output_patents = []
     for i, patent in enumerate(patents):
         output_patents.append({
-            "x": float(coords[i][0]),
-            "y": float(coords[i][1]),
-            "area_id": patent_area_map.get(i, -1),
-            "topic_id": int(topic_labels[i]),
+            "x_umap": float(patent_positions_umap[i, 0]),
+            "y_umap": float(patent_positions_umap[i, 1]),
+            "x_tsne": float(patent_positions_tsne[i, 0]),
+            "y_tsne": float(patent_positions_tsne[i, 1]),
+            "cluster_id": int(labels[i]),
             "title": patent.get("title", ""),
             "abstract": patent.get("abstract", ""),
             "year": patent.get("year"),
             "index": i,
         })
 
-    # Step 6: Calculate stats
-    stats = {
-        "total_patents": n_patents,
-        "total_areas": len(areas),
-        "avg_per_area": round(n_patents / max(len(areas), 1), 2),
-        "grid_size": grid_size,
-        "small_cell_patents": len(small_cells),
-    }
-
-    print(f"  → {stats['total_areas']} areas created")
-    print(f"  → {stats['small_cell_patents']} patents reassigned from small cells")
+    sizes = [c["count"] for c in clusters.values()]
+    print(f"  Cluster sizes: min={min(sizes)} max={max(sizes)} avg={np.mean(sizes):.1f}")
 
     return {
         "patents": output_patents,
-        "areas": areas,
-        "stats": stats,
+        "clusters": clusters,
+        "cluster_patent_indices": cluster_patent_indices,
+        "cluster_labels": cluster_labels,
+        "stats": {
+            "total_patents": n_patents,
+            "total_clusters": n_clusters,
+            "avg_per_cluster": round(n_patents / max(n_clusters, 1), 2),
+            "distance_threshold": distance_threshold,
+        },
+        "method": {
+            "umap_params": {"spread": 3.0, "min_dist": 1.0},
+            "tsne_params": {"perplexity": 30},
+        },
     }
-
-
-def _create_area(
-    area_id: int,
-    cell_key: str,
-    patents: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    centroid_x = np.mean([p["x"] for p in patents])
-    centroid_y = np.mean([p["y"] for p in patents])
-
-    topic_ids = [p["topic_id"] for p in patents if p["topic_id"] != -1]
-    if topic_ids:
-        topic_counts = Counter(topic_ids)
-        dominant_topic = topic_counts.most_common(1)[0][0]
-        dominance = topic_counts.most_common(1)[0][1] / len(patents)
-    else:
-        dominant_topic = -1
-        dominance = 0
-
-    year_counts = defaultdict(int)
-    for p in patents:
-        if p["year"]:
-            year_counts[p["year"]] += 1
-
-    return {
-        "id": area_id,
-        "cell_key": cell_key,
-        "centroid": {"x": float(centroid_x), "y": float(centroid_y)},
-        "count": len(patents),
-        "topic_id": int(dominant_topic),
-        "topic_dominance": round(dominance, 2),
-        "yearCounts": dict(year_counts),
-        "label": "",
-    }
-
-
-def _find_nearest_area(
-    x: float,
-    y: float,
-    areas: Dict[str, Dict[str, Any]],
-) -> Optional[int]:
-    if not areas:
-        return None
-
-    min_dist = float("inf")
-    nearest = None
-
-    for area_id, area in areas.items():
-        centroid = area["centroid"]
-        dist = (x - centroid["x"]) ** 2 + (y - centroid["y"]) ** 2
-        if dist < min_dist:
-            min_dist = dist
-            nearest = int(area_id)
-
-    return nearest
-
-
-def build_topic_hierarchy(
-    areas: Dict[str, Dict[str, Any]],
-    topic_labels_dict: Dict[int, str],
-) -> Dict[str, Dict[str, Any]]:
-    topics = defaultdict(lambda: {"areas": [], "totalPatents": 0})
-
-    for area_id, area in areas.items():
-        topic_id = area.get("topic_id", -1)
-        if topic_id == -1:
-            continue
-
-        topics[topic_id]["areas"].append({
-            "area_id": int(area_id),
-            "count": area["count"],
-            "category": area.get("category", "sparse"),
-            "topic_category": area.get("topic_category", "sparse"),
-            "trend": area.get("trend", 1.0),
-            "centroid": area["centroid"],
-            "label": area.get("label", ""),
-        })
-        topics[topic_id]["totalPatents"] += area["count"]
-
-    result = {}
-    for topic_id, data in topics.items():
-        data["areas"].sort(key=lambda x: -x["count"])
-
-        result[str(topic_id)] = {
-            "id": topic_id,
-            "label": topic_labels_dict.get(topic_id, "unlabeled"),
-            "totalPatents": data["totalPatents"],
-            "areaCount": len(data["areas"]),
-            "areas": data["areas"],
-        }
-
-    print(f"Built hierarchy: {len(result)} topics")
-    return result

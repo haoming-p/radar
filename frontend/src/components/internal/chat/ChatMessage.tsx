@@ -77,6 +77,19 @@ export default function ChatMessage({ message }: ChatMessageProps) {
                     </code>
                   );
                 },
+                // Tables
+                table: ({ children }) => (
+                  <table className="text-xs border-collapse w-full mb-2">{children}</table>
+                ),
+                thead: ({ children }) => (
+                  <thead className="bg-gray-50">{children}</thead>
+                ),
+                th: ({ children }) => (
+                  <th className="border border-gray-200 px-2 py-1 text-left font-semibold text-gray-700">{children}</th>
+                ),
+                td: ({ children }) => (
+                  <td className="border border-gray-200 px-2 py-1 text-gray-600">{children}</td>
+                ),
                 // Links
                 a: ({ href, children }) => (
                   <a

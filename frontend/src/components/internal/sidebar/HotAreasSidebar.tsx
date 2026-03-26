@@ -1,20 +1,20 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
-import { AreaInfo } from "../map/RadarMap";
+import { ChevronDown, ChevronRight, Flame } from "lucide-react";
+import { HotAreaInfo } from "../map/RadarMap";
 
-interface KeyAreasSidebarProps {
-  areas: Record<string, AreaInfo>;
-  activeAreaId: number | null;
-  onHighlightArea: (id: number | null) => void;
-  onSelectArea: (id: number) => void;
+interface HotAreasSidebarProps {
+  hotAreas: Record<string, HotAreaInfo>;
+  activeHotAreaId: number | null;
+  onHighlightHotArea: (id: number | null) => void;
+  onSelectHotArea: (id: number) => void;
 }
 
-export default function KeyAreasSidebar({
-  areas,
-  activeAreaId,
-  onHighlightArea,
-  onSelectArea,
-}: KeyAreasSidebarProps) {
-  const sortedAreas = Object.values(areas).sort(
+export default function HotAreasSidebar({
+  hotAreas,
+  activeHotAreaId,
+  onHighlightHotArea,
+  onSelectHotArea,
+}: HotAreasSidebarProps) {
+  const sortedAreas = Object.values(hotAreas).sort(
     (a, b) => b.patent_count - a.patent_count
   );
 
@@ -23,30 +23,29 @@ export default function KeyAreasSidebar({
       {/* Sub-header */}
       <div className="px-4 py-2 flex-shrink-0">
         <p className="text-xs text-gray-500">
-          {sortedAreas.length} areas detected
+          <Flame size={11} className="inline-block mr-1 -mt-0.5 text-orange-400" />
+          {sortedAreas.length} hot areas detected
         </p>
       </div>
 
       {/* Area list */}
       <div className="flex-1 overflow-y-auto">
-        {sortedAreas.map((area) => {
-          const isActive = area.id === activeAreaId;
+        {sortedAreas.map((area, idx) => {
+          const isActive = area.id === activeHotAreaId;
 
           return (
             <div
               key={area.id}
               className={`border-b border-gray-100 transition-colors ${
-                isActive
-                  ? "bg-indigo-50 border-l-2 border-l-indigo-400"
-                  : ""
+                isActive ? "bg-indigo-50 border-l-2 border-l-indigo-400" : ""
               }`}
-              onMouseEnter={() => onHighlightArea(area.id)}
-              onMouseLeave={() => onHighlightArea(null)}
+              onMouseEnter={() => onHighlightHotArea(area.id)}
+              onMouseLeave={() => onHighlightHotArea(null)}
             >
               {/* Area header */}
               <button
                 className="w-full text-left px-4 py-2.5 flex items-start gap-2 hover:bg-gray-50"
-                onClick={() => onSelectArea(area.id)}
+                onClick={() => onSelectHotArea(area.id)}
               >
                 <span className="mt-0.5 flex-shrink-0 text-gray-400">
                   {isActive ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -64,14 +63,12 @@ export default function KeyAreasSidebar({
               {/* Expanded details */}
               {isActive && (
                 <div className="px-4 pb-3 pl-10">
-                  {/* Summary */}
                   {area.summary && (
                     <p className="text-xs text-gray-600 leading-relaxed mb-2">
                       {area.summary}
                     </p>
                   )}
 
-                  {/* Keywords */}
                   {area.keywords && (
                     <div>
                       <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
@@ -97,9 +94,7 @@ export default function KeyAreasSidebar({
 
         {sortedAreas.length === 0 && (
           <div className="px-4 py-8 text-center text-sm text-gray-400">
-            No areas detected yet.
-            <br />
-            Upload a CSV and run analysis.
+            No hot areas detected.
           </div>
         )}
       </div>

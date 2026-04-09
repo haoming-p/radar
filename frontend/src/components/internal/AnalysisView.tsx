@@ -8,13 +8,13 @@ import ChatBot from "./chat/ChatBot";
 import { processPlayerData, parseCSV } from "../../scripts/PlayerDataUtils";
 import { LandscapeData, MapSelection, MapAction, SuggestedHotArea, regenerateZones } from "../../scripts/chatUtils";
 
-// Radar 1.0 reference data
-import radar10Data from "../../testData/radar10-272364.json";
-// Raw CSV for player/applicant data
-import rawCsvText from "../../testData/raw-272364.csv?raw";
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SpatialData = any;
+
+// Reference data is fetched at runtime from /data/* (served by Vite's public/ folder)
+// rather than imported as modules — keeps the JS bundle small and avoids OOM at build.
+const RADAR10_JSON_URL = "/data/radar10-272364.json";
+const RAW_CSV_URL = "/data/raw-272364.csv";
 
 
 interface AnalysisViewProps {
@@ -33,7 +33,7 @@ export default function AnalysisView({ onBack, data, mode = "internal" }: Analys
   const [dimensions] = useState({ width: 900, height: 700 });
   const [dimMethod, setDimMethod] = useState<DimMethod>("tsne");
   const [viewSource] = useState<ViewSource>("radar10");
-  const [sectionContext, setSectionContext] = useState<InteractionContext>("keyAreas");
+  const [sectionContext, setSectionContext] = useState<InteractionContext>("hotAreas");
 
   // Explore mode state
   const [exploreClickPx, setExploreClickPx] = useState<{ x: number; y: number } | null>(null);
@@ -101,8 +101,36 @@ export default function AnalysisView({ onBack, data, mode = "internal" }: Analys
   const areas: Record<string, AreaInfo> = data?.areas || {};
   const method = data?.method || {};
 
+  // Reference data fetched at runtime (see RADAR10_JSON_URL / RAW_CSV_URL)
+  const [radar10Data, setRadar10Data] = useState<any | null>(null);
+  const [rawCsvText, setRawCsvText] = useState<string | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [jsonRes, csvRes] = await Promise.all([
+          fetch(RADAR10_JSON_URL),
+          fetch(RAW_CSV_URL),
+        ]);
+        if (!jsonRes.ok) throw new Error(`Failed to load ${RADAR10_JSON_URL}: ${jsonRes.status}`);
+        if (!csvRes.ok) throw new Error(`Failed to load ${RAW_CSV_URL}: ${csvRes.status}`);
+        const json = await jsonRes.json();
+        const csv = await csvRes.text();
+        if (cancelled) return;
+        setRadar10Data(json);
+        setRawCsvText(csv);
+      } catch (e) {
+        if (!cancelled) setDataError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // Parse radar 1.0 data (static, uses single centroid field)
   const radar10Clusters = useMemo(() => {
+    if (!radar10Data) return {} as Record<string, ClusterInfo>;
     const clusters: Record<string, ClusterInfo> = {};
     for (const [id, cl] of Object.entries(radar10Data.clusters as Record<string, any>)) {
       clusters[id] = {
@@ -112,9 +140,10 @@ export default function AnalysisView({ onBack, data, mode = "internal" }: Analys
       };
     }
     return clusters;
-  }, []);
+  }, [radar10Data]);
 
   const radar10Patents = useMemo(() => {
+    if (!radar10Data) return [] as PatentPoint[];
     return (radar10Data.patents as any[]).map((p) => ({
       ...p,
       x_umap: p.x,
@@ -122,34 +151,38 @@ export default function AnalysisView({ onBack, data, mode = "internal" }: Analys
       x_tsne: p.x,
       y_tsne: p.y,
     }));
-  }, []);
+  }, [radar10Data]);
 
   const radar10Areas = useMemo(() => {
+    if (!radar10Data) return {} as Record<string, AreaInfo>;
     const raw = (radar10Data as any).areas || {};
     const result: Record<string, AreaInfo> = {};
     for (const [id, area] of Object.entries(raw as Record<string, any>)) {
       result[id] = area;
     }
     return result;
-  }, []);
+  }, [radar10Data]);
 
   const radar10HotAreas = useMemo(() => {
+    if (!radar10Data) return {} as Record<string, HotAreaInfo>;
     const raw = (radar10Data as any).hot_areas || {};
     const result: Record<string, HotAreaInfo> = {};
     for (const [id, area] of Object.entries(raw as Record<string, any>)) {
       result[id] = area;
     }
     return result;
-  }, []);
+  }, [radar10Data]);
 
   const radar10Currents = useMemo((): CurrentsData | undefined => {
+    if (!radar10Data) return undefined;
     const raw = (radar10Data as any).currents;
     if (!raw) return undefined;
     return raw as CurrentsData;
-  }, []);
+  }, [radar10Data]);
 
   // Compute player data from raw CSV + radar10 spatial data
   useEffect(() => {
+    if (!radar10Data || !rawCsvText) return;
     const rawPatents = parseCSV(rawCsvText);
     const spatialPatents = (radar10Data.patents as any[]).map((p: any) => ({
       index: p.index as number,
@@ -166,7 +199,7 @@ export default function AnalysisView({ onBack, data, mode = "internal" }: Analys
     setPlayers(result.players);
     setYearRange(result.yearRange);
     setSelectedYear(result.yearRange[1]); // Default to latest year
-  }, []);
+  }, [radar10Data, rawCsvText]);
 
   // Select active data based on view source
   const activePatents = viewSource === "radar10" ? radar10Patents : pipelinePatents;
@@ -470,6 +503,24 @@ export default function AnalysisView({ onBack, data, mode = "internal" }: Analys
   const paramsText = dimMethod === "umap"
     ? `spread: ${currentParams.spread}, min_dist: ${currentParams.min_dist}`
     : `perplexity: ${currentParams.perplexity}`;
+  void paramsText; // currently unused; preserved from original code
+
+  // Loading / error gate: wait for runtime-fetched reference data before rendering the UI
+  if (dataError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-sm text-red-600 gap-2">
+        <div>Failed to load reference data.</div>
+        <div className="text-xs text-gray-500">{dataError}</div>
+      </div>
+    );
+  }
+  if (!radar10Data || !rawCsvText) {
+    return (
+      <div className="flex items-center justify-center h-full text-sm text-gray-500">
+        Loading patent data…
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">

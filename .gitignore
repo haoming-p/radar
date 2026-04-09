@@ -24,9 +24,10 @@ Thumbs.db
 .vscode/
 .idea/
 
-# CSV data files (but keep test data)
+# CSV data files (but keep test data and public data)
 *.csv
 !frontend/src/testData/*.csv
+!frontend/public/data/*.csv
 
 
 # Test/reference data (local only)

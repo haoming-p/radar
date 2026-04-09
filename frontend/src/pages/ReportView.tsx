@@ -6,55 +6,89 @@ import { processPlayerData, parseCSV } from "../scripts/PlayerDataUtils";
 import { PlayerInfo } from "../components/internal/sidebar/PlayersSection";
 import { useState } from "react";
 
-// Import radar10 data
-import radar10Data from "../testData/radar10-272364.json";
-import rawCsvText from "../testData/raw-272364.csv?raw";
+// Reference data is fetched at runtime from /data/* (served by Vite's public/ folder)
+// rather than imported as modules — keeps the JS bundle small and avoids OOM at build.
+const RADAR10_JSON_URL = "/data/radar10-272364.json";
+const RAW_CSV_URL = "/data/raw-272364.csv";
 
 // Content width constant — all maps, charts, and card grids use this
 const CONTENT_WIDTH = 1024;
 
 export default function ReportView() {
+  // Reference data fetched at runtime
+  const [radar10Data, setRadar10Data] = useState<any | null>(null);
+  const [rawCsvText, setRawCsvText] = useState<string | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [jsonRes, csvRes] = await Promise.all([
+          fetch(RADAR10_JSON_URL),
+          fetch(RAW_CSV_URL),
+        ]);
+        if (!jsonRes.ok) throw new Error(`Failed to load ${RADAR10_JSON_URL}: ${jsonRes.status}`);
+        if (!csvRes.ok) throw new Error(`Failed to load ${RAW_CSV_URL}: ${csvRes.status}`);
+        const json = await jsonRes.json();
+        const csv = await csvRes.text();
+        if (cancelled) return;
+        setRadar10Data(json);
+        setRawCsvText(csv);
+      } catch (e) {
+        if (!cancelled) setDataError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // Parse data (same as AnalysisView)
   const clusters = useMemo(() => {
+    if (!radar10Data) return {} as Record<string, ClusterInfo>;
     const result: Record<string, ClusterInfo> = {};
     for (const [id, cl] of Object.entries(radar10Data.clusters as Record<string, any>)) {
       result[id] = { ...cl, centroid_umap: cl.centroid, centroid_tsne: cl.centroid };
     }
     return result;
-  }, []);
+  }, [radar10Data]);
 
   const patents: PatentPoint[] = useMemo(() => {
+    if (!radar10Data) return [];
     return (radar10Data.patents as any[]).map((p) => ({
       ...p, x_umap: p.x, y_umap: p.y, x_tsne: p.x, y_tsne: p.y,
     }));
-  }, []);
+  }, [radar10Data]);
 
   const areas: Record<string, AreaInfo> = useMemo(() => {
+    if (!radar10Data) return {};
     const raw = (radar10Data as any).areas || {};
     const result: Record<string, AreaInfo> = {};
     for (const [id, area] of Object.entries(raw as Record<string, any>)) {
       result[id] = area;
     }
     return result;
-  }, []);
+  }, [radar10Data]);
 
   const hotAreas: Record<string, HotAreaInfo> = useMemo(() => {
+    if (!radar10Data) return {};
     const raw = (radar10Data as any).hot_areas || {};
     const result: Record<string, HotAreaInfo> = {};
     for (const [id, area] of Object.entries(raw as Record<string, any>)) {
       result[id] = area;
     }
     return result;
-  }, []);
+  }, [radar10Data]);
 
   const currentsData: CurrentsData | undefined = useMemo(() => {
+    if (!radar10Data) return undefined;
     const raw = (radar10Data as any).currents;
     return raw as CurrentsData | undefined;
-  }, []);
+  }, [radar10Data]);
 
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
 
   useEffect(() => {
+    if (!radar10Data || !rawCsvText) return;
     const rawPatents = parseCSV(rawCsvText);
     const spatialPatents = (radar10Data.patents as any[]).map((p: any) => ({
       index: p.index as number, x: p.x as number, y: p.y as number,
@@ -66,7 +100,7 @@ export default function ReportView() {
     }
     const result = processPlayerData(rawPatents, spatialPatents, areaLabels, 20);
     setPlayers(result.players);
-  }, []);
+  }, [radar10Data, rawCsvText]);
 
   // Sort areas by patent count
   const sortedAreas = useMemo(() => {
@@ -93,6 +127,23 @@ export default function ReportView() {
 
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+
+  // Loading / error gate: wait for runtime-fetched reference data
+  if (dataError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center text-sm text-red-600 gap-2">
+        <div>Failed to load reference data.</div>
+        <div className="text-xs text-gray-500">{dataError}</div>
+      </div>
+    );
+  }
+  if (!radar10Data || !rawCsvText) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center text-sm text-gray-500">
+        Loading patent data…
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 print:bg-white">

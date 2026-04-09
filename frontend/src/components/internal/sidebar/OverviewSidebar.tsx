@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, HelpCircle, CircleDashed, Sparkles, TrendingUp, List, Loader2, Plus, Check, Eye, EyeOff, Trash2, Layers, X } from "lucide-react";
+import { ChevronDown, ChevronRight, HelpCircle, CircleDashed, Sparkles, TrendingUp, List, Loader2, Plus, Check, Eye, EyeOff, Trash2, Layers, X, Star } from "lucide-react";
 import { AreaInfo, HotAreaInfo, PatentPoint, InteractionContext, ExploreResult, CurrentsData, SavedLayer } from "../map/RadarMap";
 import PlayersSection, { PlayerInfo } from "./PlayersSection";
 
@@ -230,8 +230,8 @@ export default function OverviewSidebar({
   customHotAreaIds = new Set(),
   onRemoveCustomHotArea,
 }: OverviewSidebarProps) {
-  const [keyAreasOpen, setKeyAreasOpen] = useState(true);
-  const [hotAreasOpen, setHotAreasOpen] = useState(false);
+  const [keyAreasOpen, setKeyAreasOpen] = useState(false);
+  const [hotAreasOpen, setHotAreasOpen] = useState(true);
   const [currentsOpen, setCurrentsOpen] = useState(false);
   const [exploreOpen, setExploreOpen] = useState(false);
   const [playersOpen, setPlayersOpen] = useState(false);
@@ -255,6 +255,89 @@ export default function OverviewSidebar({
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
+      {/* ── Heatmap ── */}
+      <button
+        className={`flex items-center gap-2 px-4 py-2.5 bg-gray-50 border-b border-gray-200 hover:bg-gray-100 w-full text-left flex-shrink-0 ${
+          sectionContext === "hotAreas" ? "bg-gray-100" : ""
+        }`}
+        onClick={() => {
+          if (sectionContext === "hotAreas") {
+            setHotAreasOpen((v) => !v);
+          } else {
+            collapseOthers("hotAreas");
+            setHotAreasOpen(true);
+            onSectionContextChange("hotAreas");
+          }
+        }}
+      >
+        <span className="text-gray-400">
+          {hotAreasOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1">
+            <span className={`text-sm font-semibold ${
+              sectionContext === "hotAreas" ? "text-[#0d3356]" : "text-gray-600"
+            }`}>
+              Heatmap
+            </span>
+            <InfoButton onClick={(e) => { e.stopPropagation(); setInfoOpen((v) => v === "hotAreas" ? null : "hotAreas"); }} />
+            <span className="text-[10px] text-gray-400 ml-auto">{sortedHotAreas.length}</span>
+          </div>
+          <p className="text-[10px] text-gray-400 mt-0.5">Here's where the density is highest</p>
+        </div>
+      </button>
+
+      {infoOpen === "hotAreas" && (
+        <InfoPanel
+          text="High-concentration zones detected from the density heatmap — boundaries follow the contour lines you see on the map."
+          onClose={() => setInfoOpen(null)}
+        />
+      )}
+
+      {hotAreasOpen && sortedHotAreas.map((area) => (
+        <div key={`ha-wrap-${area.id}`} className="relative">
+          <AreaItem
+            key={`ha-${area.id}`}
+            area={area}
+            isActive={area.id === activeHotAreaId}
+            variant="hotArea"
+            section="hotAreas"
+            onClick={() => onSelectHotArea(area.id)}
+            onAskAI={onAskAI}
+            onHighlightChat={onHighlightChat}
+            onSave={() => onSaveLayer({ section: "hotAreas", itemId: area.id })}
+            isSaved={isLayerSaved("hotAreas", area.id)}
+          />
+          {customHotAreaIds.has(area.id) && onRemoveCustomHotArea && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRemoveCustomHotArea(area.id); }}
+              className="absolute top-1.5 right-2 p-0.5 rounded text-gray-300 hover:text-red-500 transition-colors"
+              title="Remove AI-discovered area"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      ))}
+
+      {hotAreasOpen && onAskAI && (
+        <button
+          onClick={() => {
+            onAskAI(
+              "Help me add more hot areas on the map. Look for additional high-density regions that might be missing from the current heatmap analysis.",
+              "hotAreas",
+              { label: "Add Hot Area", patents: 0, clusters: 0 }
+            );
+          }}
+          onMouseEnter={() => onHighlightChat?.(true)}
+          onMouseLeave={() => onHighlightChat?.(false)}
+          className="mx-4 my-2 flex items-center gap-1 text-[10px] text-emerald-600 hover:text-emerald-700 transition-colors"
+        >
+          <Star size={11} />
+          Add hot area
+        </button>
+      )}
+
       {/* ── Territory Zones ── */}
       <button
         className={`flex items-center gap-2 px-4 py-2.5 bg-gray-50 border-b border-gray-200 hover:bg-gray-100 w-full text-left flex-shrink-0 ${
@@ -515,71 +598,6 @@ export default function OverviewSidebar({
         </div>
       )}
 
-      {/* ── Hot Map ── */}
-      <button
-        className={`flex items-center gap-2 px-4 py-2.5 bg-gray-50 border-b border-gray-200 hover:bg-gray-100 w-full text-left flex-shrink-0 ${
-          sectionContext === "hotAreas" ? "bg-gray-100" : ""
-        }`}
-        onClick={() => {
-          if (sectionContext === "hotAreas") {
-            setHotAreasOpen((v) => !v);
-          } else {
-            collapseOthers("hotAreas");
-            setHotAreasOpen(true);
-            onSectionContextChange("hotAreas");
-          }
-        }}
-      >
-        <span className="text-gray-400">
-          {hotAreasOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1">
-            <span className={`text-sm font-semibold ${
-              sectionContext === "hotAreas" ? "text-[#0d3356]" : "text-gray-600"
-            }`}>
-              Heatmap
-            </span>
-            <InfoButton onClick={(e) => { e.stopPropagation(); setInfoOpen((v) => v === "hotAreas" ? null : "hotAreas"); }} />
-            <span className="text-[10px] text-gray-400 ml-auto">{sortedHotAreas.length}</span>
-          </div>
-          <p className="text-[10px] text-gray-400 mt-0.5">Here's where the density is highest</p>
-        </div>
-      </button>
-
-      {infoOpen === "hotAreas" && (
-        <InfoPanel
-          text="High-concentration zones detected from the density heatmap — boundaries follow the contour lines you see on the map."
-          onClose={() => setInfoOpen(null)}
-        />
-      )}
-
-      {hotAreasOpen && sortedHotAreas.map((area) => (
-        <div key={`ha-wrap-${area.id}`} className="relative">
-          <AreaItem
-            key={`ha-${area.id}`}
-            area={area}
-            isActive={area.id === activeHotAreaId}
-            variant="hotArea"
-            section="hotAreas"
-            onClick={() => onSelectHotArea(area.id)}
-            onAskAI={onAskAI}
-            onHighlightChat={onHighlightChat}
-            onSave={() => onSaveLayer({ section: "hotAreas", itemId: area.id })}
-            isSaved={isLayerSaved("hotAreas", area.id)}
-          />
-          {customHotAreaIds.has(area.id) && onRemoveCustomHotArea && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onRemoveCustomHotArea(area.id); }}
-              className="absolute top-1.5 right-2 p-0.5 rounded text-gray-300 hover:text-red-500 transition-colors"
-              title="Remove AI-discovered area"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      ))}
-
       {/* ── Player Trend ── */}
       <button
         className={`flex items-center gap-2 px-4 py-2.5 bg-gray-50 border-b border-gray-200 hover:bg-gray-100 w-full text-left flex-shrink-0 ${
@@ -713,40 +731,67 @@ export default function OverviewSidebar({
                   </div>
                 </div>
               )}
-              {onAskAI && (
-                <button
-                  onClick={() => {
-                    onAskAI(
-                      `Analyze selected area: ${exploreResult.clusterCount} clusters, ${exploreResult.patentCount} patents. Keywords: ${exploreResult.topKeywords.slice(0, 5).join(", ")}`,
-                      "explore",
-                      {
-                        label: `${exploreResult.clusterCount} clusters, ${exploreResult.patentCount} patents`,
-                        patents: exploreResult.patentCount,
-                        clusters: exploreResult.clusterCount,
-                        keywords: exploreResult.topKeywords.slice(0, 10).join(", "),
-                      }
-                    );
-                  }}
-                  onMouseEnter={() => onHighlightChat?.(true)}
-                  onMouseLeave={() => onHighlightChat?.(false)}
-                  className={`mt-2 flex items-center gap-1 text-[10px] text-teal-600 hover:text-teal-700 transition-colors ${
-                    isSummarizing ? "opacity-60 pointer-events-none" : ""
-                  }`}
-                >
-                  {isSummarizing ? (
-                    <Loader2 size={11} className="animate-spin" />
-                  ) : (
-                    <Sparkles size={11} />
-                  )}
-                  {exploreSummary ? "Re-summarize this area" : "Summarize this area"}
-                </button>
-              )}
-              {exploreSummary && exploreName && (
-                <div className="mt-1 flex items-center gap-1 text-[10px] text-emerald-600">
-                  <Check size={11} />
-                  Saved
-                </div>
-              )}
+              <div className="mt-2 flex items-center gap-3">
+                {onAskAI && (
+                  <button
+                    onClick={() => {
+                      onAskAI(
+                        `Analyze selected area: ${exploreResult.clusterCount} clusters, ${exploreResult.patentCount} patents. Keywords: ${exploreResult.topKeywords.slice(0, 5).join(", ")}`,
+                        "explore",
+                        {
+                          label: `${exploreResult.clusterCount} clusters, ${exploreResult.patentCount} patents`,
+                          patents: exploreResult.patentCount,
+                          clusters: exploreResult.clusterCount,
+                          keywords: exploreResult.topKeywords.slice(0, 10).join(", "),
+                        }
+                      );
+                    }}
+                    onMouseEnter={() => onHighlightChat?.(true)}
+                    onMouseLeave={() => onHighlightChat?.(false)}
+                    className={`flex items-center gap-1 text-[10px] text-teal-600 hover:text-teal-700 transition-colors ${
+                      isSummarizing ? "opacity-60 pointer-events-none" : ""
+                    }`}
+                  >
+                    {isSummarizing ? (
+                      <Loader2 size={11} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={11} />
+                    )}
+                    {exploreSummary ? "Re-summarize this area" : "Summarize this area"}
+                  </button>
+                )}
+                {(() => {
+                  const exploreItemId = `explore-${[...exploreResult.enclosedClusterIds].sort((a, b) => a - b).join("-")}`;
+                  const saved = isLayerSaved("explore", exploreItemId);
+                  return (
+                    <button
+                      onClick={() => {
+                        if (saved) return;
+                        onSaveLayer({
+                          section: "explore",
+                          itemId: exploreItemId,
+                          exploreData: {
+                            name: exploreName ?? `Area (${exploreResult.clusterCount} clusters)`,
+                            summary: exploreSummary ?? "",
+                            clusterCount: exploreResult.clusterCount,
+                            patentCount: exploreResult.patentCount,
+                            topKeywords: exploreResult.topKeywords,
+                            path: exploreResult.path,
+                            enclosedClusterIds: exploreResult.enclosedClusterIds,
+                          },
+                        });
+                      }}
+                      className={`flex items-center gap-1 text-[10px] transition-colors ${
+                        saved ? "text-emerald-600" : "text-gray-400 hover:text-gray-600"
+                      }`}
+                      title={saved ? "Saved to layers" : "Save to layers"}
+                    >
+                      {saved ? <Check size={11} /> : <Plus size={11} />}
+                      {saved ? "Saved" : "Save"}
+                    </button>
+                  );
+                })()}
+              </div>
             </div>
           )}
 

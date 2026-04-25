@@ -1,4 +1,4 @@
-import { PlayerInfo, PLAYER_COLORS } from "../components/internal/sidebar/PlayersSection";
+import { PlayerInfo, YearlyPlayerData, PLAYER_COLORS } from "../components/internal/sidebar/PlayersSection";
 
 // Raw patent data from CSV
 export interface RawPatentData {
@@ -37,9 +37,11 @@ export function processPlayerData(
   const spatialMap = new Map<number, SpatialPatent>();
   spatialPatents.forEach((p) => spatialMap.set(p.index, p));
 
-  // Group patents by applicant
+  // Group patents by applicant (case-insensitive dedup)
+  // Key = uppercased name, value includes best display name + patents
   const applicantPatents = new Map<string, {
-    patents: { x: number; y: number; year: number; areaId: number }[];
+    displayNames: Map<string, number>; // original casing → frequency
+    patents: { x: number; y: number; year: number; areaId: number; index: number }[];
   }>();
 
   let minYear = Infinity;
@@ -51,7 +53,7 @@ export function processPlayerData(
 
     // Parse applicants (may be separated by ; or |)
     const applicants = parseApplicants(raw.applicants);
-    
+
     // Parse year from filing date
     const year = parseYear(raw.filing_date);
     if (!year) return;
@@ -61,14 +63,18 @@ export function processPlayerData(
 
     // Add to each applicant (usually just the first/primary one)
     applicants.forEach((applicant) => {
-      if (!applicantPatents.has(applicant)) {
-        applicantPatents.set(applicant, { patents: [] });
+      const key = applicant.toUpperCase();
+      if (!applicantPatents.has(key)) {
+        applicantPatents.set(key, { displayNames: new Map(), patents: [] });
       }
-      applicantPatents.get(applicant)!.patents.push({
+      const entry = applicantPatents.get(key)!;
+      entry.displayNames.set(applicant, (entry.displayNames.get(applicant) || 0) + 1);
+      entry.patents.push({
         x: spatial.x,
         y: spatial.y,
         year,
         areaId: spatial.area_id,
+        index: raw.index,
       });
     });
   });
@@ -76,15 +82,19 @@ export function processPlayerData(
   // Convert to PlayerInfo and sort by patent count
   const allPlayers: PlayerInfo[] = [];
 
-  applicantPatents.forEach((data, name) => {
+  applicantPatents.forEach((data) => {
     const patents = data.patents;
     if (patents.length < 2) return; // Skip single-patent applicants
 
-    // Calculate center of gravity (weighted average)
-    const center = calculateCenter(patents);
+    // Pick most frequent original casing as display name
+    let name = "";
+    let maxFreq = 0;
+    data.displayNames.forEach((freq, original) => {
+      if (freq > maxFreq) { maxFreq = freq; name = original; }
+    });
 
-    // Calculate distribution radius (standard deviation)
-    const radius = calculateRadius(patents, center);
+    // Calculate density-based center and radius
+    const { center, radius } = calculateDenseCenter(patents);
 
     // Group by year (with top areas per year)
     const yearlyData = calculateYearlyData(patents, minYear, maxYear, areas);
@@ -98,6 +108,7 @@ export function processPlayerData(
       color: "", // Will be assigned later
       center,
       radius,
+      patents: patents.map((p) => ({ x: p.x, y: p.y, year: p.year, index: p.index })),
       yearlyData,
       topAreas,
     });
@@ -192,6 +203,55 @@ function calculateRadius(
 }
 
 /**
+ * Find the density-based center and radius.
+ * 1. For each patent, count neighbors within a search radius
+ * 2. Center = average of the densest neighborhood
+ * 3. Radius = std dev of that neighborhood
+ */
+function calculateDenseCenter(
+  patents: { x: number; y: number }[]
+): { center: { x: number; y: number }; radius: number } {
+  if (patents.length <= 2) {
+    const center = calculateCenter(patents);
+    return { center, radius: calculateRadius(patents, center) };
+  }
+
+  // Search radius = 30% of overall spread
+  const avgCenter = calculateCenter(patents);
+  const overallRadius = calculateRadius(patents, avgCenter);
+  const searchR = overallRadius * 0.6;
+  const searchR2 = searchR * searchR;
+
+  // Find the patent with the most neighbors
+  let bestIdx = 0;
+  let bestCount = 0;
+  for (let i = 0; i < patents.length; i++) {
+    let count = 0;
+    for (let j = 0; j < patents.length; j++) {
+      const dx = patents[i].x - patents[j].x;
+      const dy = patents[i].y - patents[j].y;
+      if (dx * dx + dy * dy <= searchR2) count++;
+    }
+    if (count > bestCount) {
+      bestCount = count;
+      bestIdx = i;
+    }
+  }
+
+  // Collect the dense neighborhood
+  const peak = patents[bestIdx];
+  const neighbors = patents.filter((p) => {
+    const dx = p.x - peak.x;
+    const dy = p.y - peak.y;
+    return dx * dx + dy * dy <= searchR2;
+  });
+
+  const center = calculateCenter(neighbors);
+  const radius = calculateRadius(neighbors, center);
+  return { center, radius };
+}
+
+/**
  * Calculate yearly patent counts, centers, and top areas
  */
 function calculateYearlyData(
@@ -199,7 +259,7 @@ function calculateYearlyData(
   minYear: number,
   maxYear: number,
   areas: Record<string, AreaLabelInfo>
-): { year: number; count: number; center: { x: number; y: number }; topAreas: { areaId: number; count: number; label: string }[] }[] {
+): YearlyPlayerData[] {
   const byYear = new Map<number, { x: number; y: number; areaId: number }[]>();
 
   // Initialize all years
@@ -215,17 +275,17 @@ function calculateYearlyData(
   });
 
   // Convert to array
-  const result: { year: number; count: number; center: { x: number; y: number }; topAreas: { areaId: number; count: number; label: string }[] }[] = [];
+  const result: YearlyPlayerData[] = [];
   byYear.forEach((yearPatents, year) => {
     const count = yearPatents.length;
-    const center = count > 0
-      ? calculateCenter(yearPatents)
-      : { x: 0, y: 0 };
-    
+    const { center, radius } = count > 0
+      ? calculateDenseCenter(yearPatents)
+      : { center: { x: 0, y: 0 }, radius: 0 };
+
     // Calculate top areas for this year
     const topAreas = calculateTopAreasFromList(yearPatents, areas);
-    
-    result.push({ year, count, center, topAreas });
+
+    result.push({ year, count, center, radius, topAreas });
   });
 
   return result.sort((a, b) => a.year - b.year);

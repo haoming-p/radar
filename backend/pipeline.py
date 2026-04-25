@@ -2,15 +2,18 @@
 Radar 1.2 Pipeline: CSV → JSON for frontend
 
 Flow:
-1. Load CSV with embeddings
-2. Load normalized applicants
-3. Agglomerative clustering on 1536D embeddings (~1500 clusters)
-4. UMAP reduce cluster centroids to 2D
-5. Label clusters (c-TF-IDF)
-6. Area detection (TODO: from visual density)
-7. Area labeling (LLM key phrase + summary)
-8. Player data
-9. Output JSON
+1.  Load CSV with embeddings                                    → load_patents()  (this file)
+2.  Load normalized applicants                                  → load_normalized_applicants()  (this file)
+3.  Agglomerative clustering on 1536D embeddings (~1500 cl.)    → spatial_grid.py → cluster_and_reduce()
+4.  UMAP reduce cluster centroids to 2D                         → spatial_grid.py → cluster_and_reduce()
+5.  Enrich clusters with c-TF-IDF labels (Radar 1.0 keywords)   → enrich_clusters_with_labels()  (this file)
+                                                                  reads backend/data/cluster_labels_*.json
+6.  Area detection (DBSCAN + Agglomerative)                     → TODO: areas.py  (phase 2 of refactor)
+7.  Area labeling (LLM key phrase + summary)                    → labeling_llm.py → generate_macro_area_labels_llm()
+8.  Hot map (KDE + contour extraction)                          → TODO: hot_areas.py  (phase 3 of refactor)
+9.  Currents (convergence regions + signals)                    → TODO: currents.py  (phase 4 of refactor)
+10. Player data                                                 → calculate_player_data()  (this file)
+11. Output JSON                                                 → run_pipeline()  (this file)
 """
 
 import json
@@ -24,6 +27,10 @@ from collections import Counter, defaultdict
 
 from spatial_grid import cluster_and_reduce
 from labeling_llm import generate_macro_area_labels_llm
+
+# Default location for the small cluster-labels lookup file (committed to repo).
+# Produced by `extract_cluster_labels.py` from the Radar 1.0 analysis CSV.
+DEFAULT_CLUSTER_LABELS = Path(__file__).parent / "data" / "cluster_labels_272364.json"
 
 
 # ============ LOAD FUNCTIONS ============
@@ -76,6 +83,50 @@ def load_normalized_applicants(filepath):
     unique_count = len(set(a for a in applicants if a))
     print(f"  Loaded {len(applicants)} rows, {unique_count} unique applicants")
     return applicants
+
+
+# ============ CLUSTER LABEL ENRICHMENT ============
+
+def enrich_clusters_with_labels(clusters, labels_path):
+    """
+    Attach c-TF-IDF keywords to each cluster from a small lookup file.
+
+    Reads a JSON of shape:
+        { "<cluster_id>": {"keywords": [...], "compound_keywords": [...]}, ... }
+    and writes `keywords`, `compound_keywords`, and a fallback `label`
+    (joined top compound keywords) onto every cluster that has a match.
+
+    This replaces the old standalone `enrich_radar10.py`, which read directly
+    from the 9.5 MB Radar 1.0 analysis CSV. The lookup file is produced once
+    by `extract_cluster_labels.py` and lives in `backend/data/`.
+    """
+    labels_path = Path(labels_path)
+    if not labels_path.exists():
+        print(f"  Cluster labels file not found at {labels_path} — skipping enrichment")
+        return clusters
+
+    with open(labels_path, encoding="utf-8") as f:
+        labels = json.load(f)
+
+    enriched = 0
+    for cl_id, cluster in clusters.items():
+        entry = labels.get(str(cl_id))
+        if not entry:
+            continue
+        kw = entry.get("keywords", [])
+        ckw = entry.get("compound_keywords", [])
+        cluster["keywords"] = kw
+        cluster["compound_keywords"] = ckw
+        # Synthesize a label from top compound keywords if the cluster doesn't already have one.
+        if not cluster.get("label"):
+            if ckw:
+                cluster["label"] = ", ".join(ckw[:5])
+            elif kw:
+                cluster["label"] = ", ".join(kw[:5])
+        enriched += 1
+
+    print(f"  Enriched {enriched}/{len(clusters)} clusters with c-TF-IDF labels")
+    return clusters
 
 
 # ============ PLAYER DATA ============
@@ -148,6 +199,7 @@ def run_pipeline(
     distance_threshold=1.1,
     top_players=20,
     random_state=42,
+    cluster_labels_path=None,
 ):
     # Step 1: Load patents and embeddings
     print("[1] Loading patents...")
@@ -174,6 +226,11 @@ def run_pipeline(
     )
     clusters = result["clusters"]
     print(f"  {len(clusters)} clusters")
+
+    # Step 2b: Enrich clusters with c-TF-IDF labels from Radar 1.0 lookup
+    print(f"[2b] Enriching clusters with c-TF-IDF labels")
+    labels_path = cluster_labels_path or DEFAULT_CLUSTER_LABELS
+    clusters = enrich_clusters_with_labels(clusters, labels_path)
 
     # Step 3: Area detection (placeholder — TODO: visual density based)
     print(f"[3] Area detection (skipped for now)")
@@ -262,6 +319,8 @@ def main():
     parser.add_argument("--distance-threshold", type=float, default=1.1)
     parser.add_argument("--top-players", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--cluster-labels", type=str, default=None,
+                        help=f"Path to cluster labels JSON (default: {DEFAULT_CLUSTER_LABELS})")
 
     args = parser.parse_args()
 
@@ -269,10 +328,10 @@ def main():
         input_path=args.input,
         output_path=args.output,
         applicants_path=args.applicants,
-        dim_method=args.dim,
         distance_threshold=args.distance_threshold,
         top_players=args.top_players,
         random_state=args.seed,
+        cluster_labels_path=args.cluster_labels,
     )
 
 

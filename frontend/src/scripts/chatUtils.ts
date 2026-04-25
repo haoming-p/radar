@@ -11,6 +11,7 @@ const API_BASE_URL = `${BASE_URL}/api/demo`;
 // Action types
 export type ChatAction =
   | "competitive-position"
+  | "compare-players"
   | "key-takeaways"
   | "white-space"
   | "competitor-threats";
@@ -21,12 +22,103 @@ export interface HistoryMessage {
   content: string;
 }
 
+// Map selection context
+export interface MapSelection {
+  tab?: string | null;
+  activeZone?: {
+    id: number;
+    label: string;
+    keywords?: string;
+    summary?: string;
+    clusterCount: number;
+    patentCount: number;
+    trend?: number;
+  } | null;
+  activeHotArea?: {
+    id: number;
+    label: string;
+    keywords?: string;
+    summary?: string;
+    clusterCount: number;
+    patentCount: number;
+  } | null;
+  exploreSelection?: {
+    clusterCount: number;
+    patentCount: number;
+    topKeywords: string[];
+    clusterDetails?: { id: number; label: string; count: number }[];
+  } | null;
+  selectedPlayers?: {
+    name: string;
+    totalPatents: number;
+    topAreas: { label: string }[];
+  }[] | null;
+  selectedYear?: number | null;
+}
+
+// Landscape background knowledge
+export interface LandscapeData {
+  totalPatents: number;
+  totalClusters: number;
+  zones: {
+    id: number;
+    label: string;
+    keywords?: string;
+    summary?: string;
+    clusterCount: number;
+    patentCount: number;
+    trend: number;
+  }[];
+  hotAreas: {
+    id: number;
+    label: string;
+    keywords?: string;
+    summary?: string;
+    clusterCount: number;
+    patentCount: number;
+  }[];
+  players: {
+    name: string;
+    totalPatents: number;
+    topAreas: { label: string }[];
+  }[];
+  clusters?: {
+    id: number;
+    label: string;
+    count: number;
+    keywords?: string;
+    zoneId?: number;
+  }[];
+}
+
+// Suggested hot area from AI
+export interface SuggestedHotArea {
+  name: string;
+  description: string;
+  clusterIds: number[];
+  keywords: string;
+}
+
+// Map action from AI response
+export interface MapAction {
+  type: "highlightZone" | "highlightHotArea" | "highlightPlayer" | "filterClusters" | "updateZones" | "suggestHotAreas";
+  zoneId?: number;
+  hotAreaId?: number;
+  playerName?: string;
+  keywords?: string[];
+  targetAreas?: number;
+  areas?: SuggestedHotArea[];
+}
+
 // Request type
 export interface ChatRequest {
   message: string;
   company: string;
   action?: ChatAction;
   history?: HistoryMessage[];
+  landscape?: LandscapeData;
+  mapSelection?: MapSelection;
+  mode?: "internal" | "client";
 }
 
 // Action button configuration
@@ -58,12 +150,26 @@ export const CHAT_ACTIONS: {
 ];
 
 /**
+ * Parse map actions from AI response text.
+ * Looks for ```map-action {...} ``` blocks.
+ * Returns the clean text (without action blocks) and parsed actions.
+ */
+export function parseMapActions(text: string): { cleanText: string; actions: MapAction[] } {
+  const actions: MapAction[] = [];
+  const cleanText = text.replace(/```map-action\s*\n?([\s\S]*?)```/g, (_match, jsonStr) => {
+    try {
+      const action = JSON.parse(jsonStr.trim());
+      if (action.type) actions.push(action);
+    } catch {
+      // skip invalid JSON
+    }
+    return "";
+  }).trim();
+  return { cleanText, actions };
+}
+
+/**
  * Stream a chat response from the API
- * 
- * @param request - The chat request
- * @param onChunk - Callback for each text chunk received
- * @param onDone - Callback when streaming is complete
- * @param onError - Callback for errors
  */
 export async function streamChatMessage(
   request: ChatRequest,
@@ -82,6 +188,9 @@ export async function streamChatMessage(
         company: request.company,
         action: request.action || null,
         history: request.history || [],
+        landscape: request.landscape || null,
+        mapSelection: request.mapSelection || null,
+        mode: request.mode || "internal",
       }),
     });
 
@@ -101,7 +210,7 @@ export async function streamChatMessage(
 
     while (true) {
       const { done, value } = await reader.read();
-      
+
       if (done) {
         break;
       }
@@ -116,22 +225,22 @@ export async function streamChatMessage(
       for (const line of lines) {
         if (line.startsWith("data: ")) {
           const jsonStr = line.slice(6); // Remove "data: " prefix
-          
+
           if (!jsonStr.trim()) continue;
 
           try {
             const data = JSON.parse(jsonStr);
-            
+
             if (data.error) {
               onError(data.error);
               return;
             }
-            
+
             if (data.done) {
               onDone();
               return;
             }
-            
+
             if (data.content) {
               onChunk(data.content);
             }
@@ -160,13 +269,15 @@ export function streamActionRequest(
   history: HistoryMessage[],
   onChunk: (text: string) => void,
   onDone: () => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  landscape?: LandscapeData,
+  mapSelection?: MapSelection
 ): void {
   const actionConfig = CHAT_ACTIONS.find((a) => a.id === action);
   const message = actionConfig ? actionConfig.label : action;
 
   streamChatMessage(
-    { message, company, action, history },
+    { message, company, action, history, landscape, mapSelection },
     onChunk,
     onDone,
     onError
@@ -179,7 +290,6 @@ export function streamActionRequest(
 export async function checkChatHealth(): Promise<{
   status: string;
   model: string;
-  data_exists: boolean;
 }> {
   try {
     const response = await fetch(`${API_BASE_URL}/chat/health`);
@@ -190,4 +300,24 @@ export async function checkChatHealth(): Promise<{
   } catch (error) {
     throw new Error("Chat API is not available");
   }
+}
+
+/**
+ * Regenerate territory zones with a new target number of areas.
+ * Returns new areas and cluster-to-area mapping.
+ */
+export async function regenerateZones(targetAreas: number): Promise<{
+  areas: Record<string, any>;
+  cluster_area_map: Record<string, number>;
+}> {
+  const response = await fetch(`${API_BASE_URL}/zones/regenerate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_areas: targetAreas }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `Zone regeneration failed: ${response.status}`);
+  }
+  return response.json();
 }

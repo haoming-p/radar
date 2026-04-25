@@ -15,8 +15,9 @@ function App() {
       {/* Top bar */}
       <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 flex-shrink-0">
         {/* Logo */}
-        <div className="flex items-center">
+        <div className="flex items-center gap-3">
           <img src="/logo.png" alt="VALUENEX" className="h-8" />
+          <span className="text-sm text-gray-500">demo - patent analysis</span>
         </div>
 
         {/* User label */}

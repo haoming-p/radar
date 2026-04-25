@@ -1,5 +1,4 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { ArrowLeft } from "lucide-react";
 import RadarMap, { PatentPoint, ClusterInfo, AreaInfo, HotAreaInfo, DimMethod, ViewSource, InteractionContext, ExploreResult, CurrentsData, SavedLayer } from "./map/RadarMap";
 import OverviewSidebar from "./sidebar/OverviewSidebar";
 import { PlayerInfo } from "./sidebar/PlayersSection";
@@ -18,12 +17,11 @@ const RAW_CSV_URL = "/data/raw-272364.csv";
 
 
 interface AnalysisViewProps {
-  onBack: () => void;
   data: SpatialData;
   mode?: "internal" | "client";
 }
 
-export default function AnalysisView({ onBack, data, mode = "internal" }: AnalysisViewProps) {
+export default function AnalysisView({ data, mode = "internal" }: AnalysisViewProps) {
   const lsPrefix = mode === "client" ? "radar-client-" : "radar-";
   const [highlightedArea, setHighlightedArea] = useState<number | null>(null);
   const [selectedArea, setSelectedArea] = useState<number | null>(null);
@@ -526,16 +524,6 @@ export default function AnalysisView({ onBack, data, mode = "internal" }: Analys
     <div className="flex flex-col h-full">
       {/* Top bar */}
       <div className="flex items-center gap-3 px-4 py-2 bg-gray-50 border-b flex-shrink-0 flex-wrap">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1 text-gray-500 hover:text-gray-700 text-sm"
-        >
-          <ArrowLeft size={16} />
-          Back
-        </button>
-
-        <div className="text-xs text-gray-400">|</div>
-
         <div className="text-xs text-gray-600">
           {activePatents.length} patents · {Object.keys(activeClusters).length} clusters · {Object.keys(activeAreas).length} areas
         </div>
